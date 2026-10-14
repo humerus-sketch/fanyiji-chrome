@@ -814,11 +814,21 @@ def single_instance(app):
 def smoke_test(screenshot=None, language="zh-CN"):
     set_language(language)
     from .ui import MainWindow, SettingsDialog
+    from .chrome_caption_dialog import ChromeCaptionDialog
+    from .local_features import danmaku_available
     app = QApplication.instance() or QApplication(sys.argv[:1])
     configure_application_identity(app)
     config = AppConfig(ui_language=language)
     window = MainWindow(config)
     dialog = SettingsDialog(config, first_run=True)
+    # Construct controls only: no controller, browser, saved preferences or login data.
+    caption_dialog = ChromeCaptionDialog(mode="dedicated", push_preferences={})
+    feature_checks = {
+        "danmaku_available": danmaku_available(),
+        "danmaku_controls_visible": not caption_dialog.push_controls.isHidden(),
+        "danmaku_controls_enabled": caption_dialog.push_controls.isEnabled(),
+        "danmaku_default_enabled": caption_dialog.push_enabled.isChecked(),
+    }
     window.set_session_state("界面预览 · 未采集声音")
     window.set_source_status("system", "界面预览")
     window.set_translation("system", "这只是界面预览 实际使用时显示 Chrome 字幕快照", "preview-caption")
@@ -831,9 +841,13 @@ def smoke_test(screenshot=None, language="zh-CN"):
         app.processEvents()
         dialog.grab().save(str(screenshot.with_name("first-run.png")))
     dialog.close()
+    caption_dialog.close()
     window.close()
+    if (not feature_checks["danmaku_available"] or not feature_checks["danmaku_controls_visible"]
+            or not feature_checks["danmaku_controls_enabled"] or feature_checks["danmaku_default_enabled"]):
+        raise RuntimeError("public_danmaku_smoke_failed")
     print(json.dumps({"ui_smoke": "passed", "audio_capture": False, "settings_written": False,
-                      "browser_opened": False, "project": "chrome"}))
+                      "browser_opened": False, "project": "chrome", **feature_checks}))
     return 0
 
 

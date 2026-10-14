@@ -116,7 +116,7 @@ class ChromeCaptionDialog(QDialog):
         self.push_controls = QWidget()
         push_layout = QVBoxLayout(self.push_controls)
         push_layout.setContentsMargins(0, 0, 0, 0)
-        self.push_enabled = QCheckBox(tr("同步稳定的新中文字幕到直播弹幕（仅本机管理员）"))
+        self.push_enabled = QCheckBox(tr("同步稳定的新中文字幕到直播弹幕"))
         preferences = push_preferences if isinstance(push_preferences, dict) else {}
         self._push_room_uses_source = not preferences.get("room")
         self.push_enabled.setChecked(preferences.get("enabled") is True)
@@ -153,8 +153,7 @@ class ChromeCaptionDialog(QDialog):
         push_layout.addWidget(_label("明确打开专用直播间或开启同步时，当前完整中文句稳定 1.2 秒后可进入待发；自动恢复或重连不重复扫历史。正文满 2 字独立发送，单字保留与下一句合并；含【】加权最多 40 单位。发送间隔至少 3.5 秒，正文只允许中文和数字。保存设置不会自动打开直播间或提交弹幕。"))
         self.push_controls.setVisible(self._danmaku_available)
         layout.addWidget(self.push_controls)
-        self.danmaku_access_note = _label("弹幕推送仅本机启用，分发版不开放")
-        self.danmaku_access_note.setVisible(not self._danmaku_available)
+        self.danmaku_access_note = _label("弹幕同步默认关闭。请先手动打开专用 Chrome 直播间并登录账号，再开启同步；现有 Chrome 只读连接不发送弹幕。")
         layout.addWidget(self.danmaku_access_note)
         layout.addWidget(_label("首次使用请在 Chrome 中启用实时字幕、添加日语，开启实时翻译并选择中文。待原生字幕出现并确认能读取后，可在专用 Chrome 模式隐藏气泡；现有 Chrome 气泡需保持可见。"))
         layout.addWidget(_label("专用 Chrome 仅保留一个目标直播标签页，推送目标必须与专用 Chrome 打开的直播间相同。连接现有 Chrome 可保留其他标签页，但目标房间需为当前标签页。字幕音源由 Chrome 自行选择，其他媒体可能切换字幕来源，不能锁定主播或分离游戏角色讲话。"))

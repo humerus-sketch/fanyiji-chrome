@@ -4,9 +4,9 @@
 
 ## 下载
 
-- [Windows x64 完整程序包](https://github.com/humerus-sketch/fanyiji-chrome/releases/download/v0.1.0/FanyiJiChrome-v0.1.0-windows-x64.zip)。无需安装 Python，完整解压后运行 `翻译姬·Chrome字幕版.exe`；不要只复制 EXE。
-- [独立源码 ZIP](https://github.com/humerus-sketch/fanyiji-chrome/releases/download/v0.1.0/FanyiJiChrome-v0.1.0-source.zip)。
-- [Release 与 SHA-256 校验文件](https://github.com/humerus-sketch/fanyiji-chrome/releases/tag/v0.1.0)。
+- [Windows x64 完整程序包](https://github.com/humerus-sketch/fanyiji-chrome/releases/download/v0.1.1/FanyiJiChrome-v0.1.1-windows-x64.zip)。无需安装 Python，完整解压后运行 `翻译姬·Chrome字幕版.exe`；不要只复制 EXE。
+- [独立源码 ZIP](https://github.com/humerus-sketch/fanyiji-chrome/releases/download/v0.1.1/FanyiJiChrome-v0.1.1-source.zip)。
+- [Release 与 SHA-256 校验文件](https://github.com/humerus-sketch/fanyiji-chrome/releases/tag/v0.1.1)。
 
 语音版是另一个项目：[翻译姬·语音版](https://github.com/humerus-sketch/fanyiji)。两版可以独立安装和运行。
 
@@ -26,7 +26,7 @@
 - 手动打开专用 Chrome 直播间，使用独立登录资料；也可只读连接现有 Chrome。
 - 读取原生中文字幕并分段显示，透明隐藏、显示和恢复原生字幕气泡。
 - 可选 GTCRN 前置增强、模型下载／校验、音频自动恢复和读取进程健康检测。
-- 本机管理员稳定译文弹幕同步、清空待发队列、词规则管理。
+- 稳定译文弹幕同步、清空待发队列、词规则管理，公开程序包均可使用。
 - 简体中文、日文、英文界面；默认字幕 16 号、透明度 66%。
 
 直接打开完整程序目录中的 **翻译姬·Chrome字幕版.exe**，不能只复制 EXE。
@@ -34,6 +34,16 @@
 现有 Chrome 只读连接不能隐藏气泡或发送弹幕。
 独立资料目录：`%LOCALAPPDATA%\FanyiJiChrome`。
 专用覆盖变量：`FANYIJI_CHROME_DATA`、`FANYIJI_CHROME_MODELS`。
+
+## 弹幕同步
+
+0.1.1 起公开程序包可使用弹幕同步，无需本机管理员授权或 `local-features.json`。首次使用默认关闭；更新保留此前保存的开关和设置。
+
+1. 点击“Chrome 直播间”，填写目标直播间并手动打开专用 Chrome。
+2. 在专用窗口自行登录 B站账号，确认直播页和中文字幕正常。
+3. 勾选“同步稳定的新中文字幕到直播弹幕”，发送目标填写专用 Chrome 当前打开的同一房间，点击“保存弹幕设置”。
+
+仅专用 Chrome 可发送；现有 Chrome 的只读连接继续只读取字幕。发送前检查登录，间隔至少 3.5 秒，保留结果核验、中文正文限制、分段、过滤词与队列处理。公开功能权限不改变 B站实际投递结果，也不自动发送测试消息。
 
 ## 边界
 
@@ -57,8 +67,7 @@ python tools/build.py
 待发队列和统计重新开始；两版配置、日志、队列、单实例锁及浏览器资料互不共用。
 已下载权重通过 `models-location.json` 复用，未复制或加入程序包。
 新电脑默认模型目录为 `%LOCALAPPDATA%\FanyiJiModels\models`。
-源码和程序包均不包含账号、Cookie、本机管理员授权或模型权重。
-公开发行包的弹幕功能仍遵守现有本机管理员授权，未向外开放。
+源码和程序包均不包含账号、Cookie、历史授权文件或模型权重；每位用户在自己的专用 Chrome 中登录。
 启动不会自动打开直播间。
 
 ## 源码运行

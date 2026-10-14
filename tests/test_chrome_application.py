@@ -70,6 +70,45 @@ def test_startup_does_not_initialize_audio_browser_or_reader(harness):
     assert not hasattr(harness.controller, "specialized")
 
 
+@pytest.mark.parametrize("language", ["zh-CN", "ja", "en"])
+@pytest.mark.parametrize("frozen", [False, True])
+def test_smoke_checks_public_controls_without_browser_or_userdata(application, tmp_path, monkeypatch, capsys, language, frozen):
+    from fanyiji import app as module, local_features
+    from fanyiji.i18n import get_language, set_language
+    previous_language = get_language()
+    monkeypatch.setattr(sys, "frozen", frozen, raising=False)
+    monkeypatch.setenv("FANYIJI_CHROME_DATA", str(tmp_path))
+    def forbidden(*args, **kwargs):
+        raise AssertionError("UI smoke must not access browser or userdata")
+    monkeypatch.setattr(module, "data_root", forbidden)
+    monkeypatch.setattr(local_features, "data_root", forbidden)
+    monkeypatch.setattr(local_features.platform, "node", forbidden)
+    monkeypatch.setattr(module, "ChromeAppController", forbidden)
+    try:
+        assert module.smoke_test(language=language) == 0
+        value = json.loads(capsys.readouterr().out)
+        assert value == {"ui_smoke": "passed", "audio_capture": False, "settings_written": False,
+                         "browser_opened": False, "project": "chrome", "danmaku_available": True,
+                         "danmaku_controls_visible": True, "danmaku_controls_enabled": True,
+                         "danmaku_default_enabled": False}
+        assert not list(tmp_path.iterdir())
+    finally:
+        set_language(previous_language)
+
+
+def test_smoke_does_not_report_passed_when_public_sender_is_unavailable(application, monkeypatch, capsys):
+    from fanyiji import app as module, local_features
+    from fanyiji.i18n import get_language, set_language
+    previous_language = get_language()
+    monkeypatch.setattr(local_features, "danmaku_available", lambda: False)
+    try:
+        with pytest.raises(RuntimeError, match="public_danmaku_smoke_failed"):
+            module.smoke_test()
+        assert not capsys.readouterr().out
+    finally:
+        set_language(previous_language)
+
+
 def test_saved_enabled_push_and_room_do_not_auto_open(harness):
     (harness.directory / "chrome-caption-settings.json").write_text(json.dumps({
         "room_url": "https://live.bilibili.com/1698225", "browser_mode": "dedicated",

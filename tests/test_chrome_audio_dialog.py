@@ -1,5 +1,6 @@
 """Chrome preprocessing controls are explicit and never enable browser or chat actions."""
 import os
+import sys
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -109,3 +110,45 @@ def test_audio_controls_translate_capabilities_and_experimental_boundaries(qt_ap
     if language != "zh-CN":
         assert tr(source) != source
         assert dialog.audio_apply_button.text() != "应用 Chrome 音频处理"
+
+
+@pytest.mark.parametrize("language", ["zh-CN", "ja", "en"])
+@pytest.mark.parametrize("mode", ["attach", "dedicated"])
+def test_public_frozen_package_shows_controls_but_requires_explicit_enable(qt_app, monkeypatch, tmp_path, language, mode):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setenv("FANYIJI_CHROME_DATA", str(tmp_path))
+    set_language(language)
+    dialog = ChromeCaptionDialog(room_url="1698225", mode=mode)
+    recorded = actions(dialog)
+    assert dialog._danmaku_available
+    assert not dialog.push_controls.isHidden()
+    assert dialog.push_controls.isEnabled() is (mode == "dedicated")
+    assert not dialog.push_enabled.isChecked()
+    assert dialog.push_enabled.text() == tr("同步稳定的新中文字幕到直播弹幕")
+    notice = "弹幕同步默认关闭。请先手动打开专用 Chrome 直播间并登录账号，再开启同步；现有 Chrome 只读连接不发送弹幕。"
+    assert dialog.danmaku_access_note.text() == tr(notice)
+    if language != "zh-CN":
+        assert tr(notice) != notice
+    assert not any(recorded.values())
+    dialog.accept()
+    assert not dialog.result_preferences["push_preferences"]["enabled"]
+    assert not any(recorded.values())
+    assert not (tmp_path / "local-features.json").exists()
+
+
+@pytest.mark.parametrize("mode", ["attach", "dedicated"])
+def test_public_sender_enable_request_still_requires_dedicated_mode(qt_app, monkeypatch, mode):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    dialog = ChromeCaptionDialog(room_url="1698225", mode=mode)
+    recorded = actions(dialog)
+    dialog.push_enabled.setChecked(True)
+    dialog._request_push_preferences()
+    dialog._request_clear_pending()
+    if mode == "dedicated":
+        assert recorded["push"] == [{"enabled": True, "room": "1698225", "interval_seconds": 3.5}]
+        assert recorded["clear"] == [True]
+    else:
+        assert not recorded["push"] and not recorded["clear"]
+    assert not recorded["dedicated"] and not recorded["connect"]
+    dialog.accept()
+    assert dialog.result_preferences["push_preferences"]["enabled"] is (mode == "dedicated")
