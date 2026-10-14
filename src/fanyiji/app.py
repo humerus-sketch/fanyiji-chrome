@@ -111,7 +111,49 @@ class ChromeAppController(QObject):
             from .chrome_browser_service import ChromeBrowserService
             self.chrome_browser_service = ChromeBrowserService(self)
             self.chrome_browser_service.event.connect(self._owned_chrome_event)
+            owned = self.chrome_browser_service
+            owned.danmaku_transport_recovery_requested.connect(
+                lambda: self._recover_chrome_danmaku_transport(owned))
         return self.chrome_browser_service
+
+
+    def _recover_chrome_danmaku_transport(self, browser):
+        if (self.closed or self.config.processing_mode != "chrome_caption"
+                or self._chrome_browser_mode != "dedicated" or not self._chrome_active_url
+                or browser is not self.chrome_browser_service):
+            return
+        if self.paused:
+            self._chrome_transport_recovery_waiting = browser
+            return
+        self._chrome_transport_recovery_waiting = None
+        epoch = self.epoch
+        self._chrome_protocol = self._chrome_push_protocol = None
+        self._chrome_initial_capture_room = ""
+        if self.chrome_danmaku:
+            self.chrome_danmaku.end_chrome_source()
+        def recover():
+            if self.closed or epoch != self.epoch or browser is not self.chrome_browser_service:
+                return
+            stage = "browser_restart"
+            try:
+                pid = browser.restart_danmaku_transport()
+                if (not pid or self.closed or epoch != self.epoch
+                        or browser is not self.chrome_browser_service):
+                    return
+                stage = "reader_restart"
+                self._ensure_chrome_caption_service().start(self._chrome_active_url, session=epoch,
+                    owned_browser_pid=pid)
+                if self._chrome_hide_caption:
+                    stage = "visibility"
+                    browser.set_caption_hidden(True)
+                logging.info("CHROME_CAPTION transport_recovery_completed epoch=%s generation=%s",
+                             epoch, browser.generation)
+            except Exception as failure:
+                self._chrome_caption_action_failed("transport", stage, failure, epoch, browser)
+        try:
+            self.executor.submit(recover)
+        except Exception as failure:
+            self._chrome_caption_action_failed("transport", "submit", failure, epoch, browser)
 
 
     def _configure_chrome_audio(self, mode, *, persist=True):
@@ -200,7 +242,8 @@ class ChromeAppController(QObject):
             return
         messages = {"caption_hidden": "原生字幕已透明隐藏，翻译姬继续读取。",
                     "caption_visible": "原生字幕已恢复显示。",
-                    "caption_recovering": "正在刷新专用直播页恢复字幕，请保持播放。",
+                    "caption_unhidden": "已取消原生字幕隐藏，等待 Chrome 显示字幕。",
+                    "caption_recovering": "专用 Chrome 已重启，等待原生字幕，请保持人声播放。",
                     "caption_visibility_failed": "当前 Chrome 气泡无法安全隐藏，原生字幕保留显示。",
                     "closed": "专用 Chrome 已关闭，请重新打开直播间。"}
         if event.get("kind") in messages:
@@ -297,10 +340,8 @@ class ChromeAppController(QObject):
         def recover():
             if self.closed or epoch != self.epoch or browser is not self.chrome_browser_service:
                 return
-            stage = "visibility"
+            stage = "browser_restart"
             try:
-                browser.set_caption_hidden(False)
-                stage = "refresh"
                 browser.recover_caption()
                 if not self.closed and epoch == self.epoch and browser is self.chrome_browser_service:
                     stage = "reader_restart"
@@ -545,6 +586,8 @@ class ChromeAppController(QObject):
                 "browser_missing": "未找到已打开的 Chrome，请先打开 Chrome 后连接。",
                 "chrome_missing": "未找到 Google Chrome，请先安装官方 Chrome。",
                 "uia_unavailable": "Chrome 字幕读取暂时失败，正在重试；无需重新登录。",
+                "dependency_missing": "字幕读取组件缺失，请更新完整程序包。",
+                "caption_engine_unavailable": "Chrome 实时字幕引擎暂不可用；字幕读取连接正常。",
                 "unsupported_platform": "Chrome 字幕桥目前仅支持 Windows。",
                 "reader_failed": "Chrome 字幕连接已中断，请重新打开直播间。",
                 "reader_recovering": "字幕读取进程失联，正在自动恢复；现有字幕保留。",
@@ -558,7 +601,7 @@ class ChromeAppController(QObject):
             self._refresh_chrome_runtime_status()
             if self.chrome_caption_dialog is not None:
                 self.chrome_caption_dialog.set_status(text)
-            if event.get("code") in {"source_unverified", "source_ambiguous", "browser_missing", "browser_closed", "reader_failed", "uia_unavailable"}:
+            if event.get("code") in {"source_unverified", "source_ambiguous", "browser_missing", "browser_closed", "reader_failed", "uia_unavailable", "dependency_missing", "caption_engine_unavailable"}:
                 self._chrome_protocol = None
                 self._chrome_push_protocol = None
                 self._chrome_initial_capture_room = ""
@@ -681,6 +724,9 @@ class ChromeAppController(QObject):
             return
         self.paused = paused is True
         self.start()
+        waiting = getattr(self, "_chrome_transport_recovery_waiting", None)
+        if not self.paused and waiting is self.chrome_browser_service and waiting is not None:
+            self._recover_chrome_danmaku_transport(waiting)
 
     def change_settings(self):
         from .ui import SettingsDialog
@@ -716,7 +762,8 @@ class ChromeAppController(QObject):
             if event.get("action") == "recovery" and event.get("stage") == "preferences":
                 message = tr("Chrome 字幕设置保存失败，仍会恢复原生字幕，请查看日志。")
             else:
-                operation = ("恢复原生字幕失败" if event.get("action") == "recovery" else
+                operation = ("弹幕连接自动恢复失败" if event.get("action") == "transport" else
+                             "恢复原生字幕失败" if event.get("action") == "recovery" else
                              "隐藏原生字幕失败" if event.get("hidden") is True else "显示原生字幕失败")
                 message = tr(operation) + tr("，请查看日志。")
             self.window.append_notice(message)

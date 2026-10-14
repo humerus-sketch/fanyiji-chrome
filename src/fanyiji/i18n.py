@@ -1508,6 +1508,22 @@ _MESSAGES.update({
     "当前选择：现有 Chrome 只读连接": ("現在の選択：既存 Chrome への読み取り専用接続", "Selected: Read-only connection to existing Chrome"),
     "隐藏原生字幕（取消勾选后显示）": ("ネイティブ字幕を非表示（チェックを外すと表示）", "Hide native captions (uncheck to show)"),
     "恢复原生字幕": ("ネイティブ字幕を復旧", "Recover native captions"),
+    "已取消原生字幕隐藏，等待 Chrome 显示字幕。": (
+        "ネイティブ字幕の非表示を解除しました。Chrome の字幕表示を待っています。",
+        "Native caption hiding cancelled. Waiting for Chrome to show captions."),
+    "专用 Chrome 已重启，等待原生字幕，请保持人声播放。": (
+        "専用 Chrome を再起動しました。音声を再生したままネイティブ字幕をお待ちください。",
+        "Dedicated Chrome restarted. Keep speech playing while waiting for native captions."),
+    "字幕读取组件缺失，请更新完整程序包。": (
+        "字幕読み取りコンポーネントが不足しています。完全なプログラムパッケージを更新してください。",
+        "Caption reader components are missing. Update the complete application package."),
+    "Chrome 实时字幕引擎暂不可用；字幕读取连接正常。": (
+        "Chrome のリアルタイム字幕エンジンは現在利用できません。字幕読み取り接続は正常です。",
+        "Chrome live-caption engine is currently unavailable; the caption reader is connected."),
+    "弹幕连接自动恢复失败": ("配信コメント接続の自動復旧に失敗しました", "Automatic live chat connection recovery failed"),
+    "隐藏和恢复仅用于翻译姬打开的专用 Chrome；恢复会取消隐藏并重启专用 Chrome，重新打开当前直播间，保留登录状态。等待人声和字幕气泡出现后恢复读取。": (
+        "非表示と復旧は翻译姬の専用 Chrome に限ります。復旧は非表示を解除して専用 Chrome を再起動し、ログインを保持して現在の配信を開き直します。音声と字幕の表示後に読み取りを再開します。",
+        "Hide and recovery apply to dedicated Chrome opened by 翻译姬. Recovery cancels hiding, restarts dedicated Chrome and reopens the current room while keeping sign-in data. Reading resumes when speech and the caption bubble appear."),
     "隐藏和恢复仅用于翻译姬打开的专用 Chrome；现有 Chrome 只读连接不能隐藏字幕或推送弹幕。恢复优先刷新专用直播页，不会自动打开 Chrome 设置。": (
         "非表示と復旧は翻译姬が開いた専用 Chrome に限ります。既存 Chrome の読み取り専用接続では字幕を非表示にしたり配信コメントを送信したりできません。復旧ではまず専用の配信ページを再読み込みし、Chrome 設定は自動で開きません。",
         "Hide and recovery apply only to dedicated Chrome opened by 翻译姬. Read-only connection to existing Chrome cannot hide captions or send live chat. Recovery first refreshes the dedicated live page and does not open Chrome settings automatically."),

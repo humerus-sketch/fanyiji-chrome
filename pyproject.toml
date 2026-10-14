@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fanyiji-chrome"
-version = "0.1.1"
+version = "0.1.4"
 description = "翻译姬：独立 Chrome 实时字幕与直播同步工具"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -13,6 +13,10 @@ dependencies = [
   "numpy==2.5.3",
   "sherpa-onnx==1.13.8",
   "websocket-client==1.9.2",
+  "pythonnet==3.2.1",
+  "clr-loader==0.3.1",
+  "cffi==2.1.1",
+  "pycparser==3.11",
 ]
 
 [project.optional-dependencies]

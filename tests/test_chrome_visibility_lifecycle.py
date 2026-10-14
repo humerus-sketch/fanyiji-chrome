@@ -38,6 +38,7 @@ class FakeService:
         self._audio_runtime = None
         self.audio_processing_mode = "off"
         self._generation = 4
+        self.url = "https://live.bilibili.com/1698225"
         self.process = FakeProcess(self.actions)
         self.job = SimpleNamespace(handle=777, close=self.close_job, owner_process=self.process)
         self._page = SimpleNamespace(call=self.page_call, close=lambda: self.actions.append(("page_close",)))
@@ -52,6 +53,18 @@ class FakeService:
     def _room_target(self):
         self.actions.append(("room_check",))
         return {"type": "page", "url": "https://live.bilibili.com/1698225"}
+
+    def open_sync(self, url):
+        assert url == self.url
+        self.stop_browser()
+        self.actions.append(("process_open", url))
+        self.process = FakeProcess(self.actions)
+        self.job = SimpleNamespace(handle=777, close=self.close_job, owner_process=self.process)
+        self._page = SimpleNamespace(call=self.page_call, close=lambda: self.actions.append(("page_close",)))
+        self._browser = SimpleNamespace(call=self.browser_call, close=lambda: self.actions.append(("connection_close",)))
+        self._generation += 1
+        self._ready = self.source_ready = True
+        return self.browser_pid
 
     def _emit(self, kind, **fields):
         self.actions.append(("event", kind, fields))
@@ -193,14 +206,14 @@ def test_monitor_revalidates_hidden_controller_and_hides_new_caption_hwnd(lifecy
     assert adapter.attributes.alpha == 0 and service._visibility.hidden
 
 
-def test_recovery_restores_before_reload_and_cancels_hide_request(lifecycle):
+def test_recovery_restores_before_owned_restart_and_cancels_hide_request(lifecycle):
     service, adapter = lifecycle
     service.set_caption_hidden(True)
     previous = service.generation
     service.recover_caption()
     names = [row[0] for row in service.actions]
-    assert names.index("unmark") < names.index("page_call")
-    assert any(row[:2] == ("page_call", "Page.reload") for row in service.actions)
+    assert names.index("unmark") < names.index("process_wait") < names.index("process_open")
+    assert not any(row[:2] == ("page_call", "Page.reload") for row in service.actions)
     assert service.generation > previous and not service._hide_requested and service._visibility is None
     assert adapter.style == 0x80
 
@@ -241,7 +254,9 @@ def test_queued_monitor_hide_decision_cannot_override_recovery_that_acquires_loc
     service, adapter = lifecycle
     service.set_caption_hidden(True)
     service._operation = BeforeMonitorLock(service.recover_caption)
-    one_monitor_tick(service, monkeypatch)
+    # Recovery replaces the process; the old monitor exits instead of sleeping
+    # or applying its queued hide decision to the new owned instance.
+    service._monitor(service.process, service.generation)
     assert service._visibility is None and not service._hide_requested
     assert adapter.style == 0x80 and adapter.attributes is None
     writes = [row for row in service.actions if row[0] == "alpha"]

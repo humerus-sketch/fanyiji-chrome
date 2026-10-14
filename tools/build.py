@@ -63,19 +63,42 @@ def _copy_supplemental_licenses(source: Path, destination: Path) -> None:
         if not path.is_file() or path.stat().st_size == 0:
             raise RuntimeError("发行包补充许可证缺失或为空：" + item)
     shutil.copytree(source, destination, dirs_exist_ok=True)
+
+
+def _verify_uia_dependencies(executable: Path, environment: dict) -> dict:
+    """Exercise the frozen CLR path; a synthetic caption fixture cannot catch missing DLLs."""
+    result = subprocess.run([str(executable), "--chrome-caption-worker", "--dependency-check"],
+                            env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, encoding="utf-8", timeout=30, check=False)
+    try:
+        value = json.loads(result.stdout)
+    except (TypeError, ValueError):
+        value = {}
+    if (result.returncode != 0 or not isinstance(value, dict) or value.get("kind") != "dependency_check"
+            or value.get("uia_dependencies") != "passed" or value.get("windows_enumerated") is not False
+            or value.get("browser_opened") is not False or value.get("profile_read") is not False):
+        # Dependency checking does not read content, but still do not echo arbitrary child output.
+        raise RuntimeError("Frozen Windows UI Automation dependency check failed")
+    return value
+
+
 def main():
     parser = argparse.ArgumentParser(description="Build this edition without model weights or user data.")
     parser.add_argument("--llama-runtime", type=Path, default=ROOT / "model-cache/translation-evaluation/llama-b11429")
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "dist")
+    parser.add_argument("--work-dir", type=Path, default=ROOT / "build/analysis")
     args = parser.parse_args()
-    destination = ROOT / "dist" / INSTALL_DIRECTORY
+    destination = args.output_dir.resolve() / INSTALL_DIRECTORY
     if EDITION == "voice" and not all((args.llama_runtime / device / "llama-server.exe").is_file() for device in ("cpu", "cuda")):
         raise SystemExit("Prepare tools/prepare_llama_runtime.py or pass --llama-runtime DIRECTORY.")
     environment = os.environ.copy()
     windows = Path(environment.get("SystemRoot", "C:/Windows"))
     environment["PATH"] = os.pathsep.join((sys.base_prefix, str(Path(sys.executable).parent), str(windows / "System32"), str(windows)))
     environment.pop("PYTHONPATH", None)
-    subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--distpath", str(ROOT / "dist"),
-                    "--workpath", str(ROOT / "build/analysis"), str(ROOT / "FanyiJi.spec")], cwd=ROOT, env=environment, check=True)
+    subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--distpath", str(destination.parent),
+                    "--workpath", str(args.work_dir.resolve()), str(ROOT / "FanyiJi.spec")], cwd=ROOT, env=environment, check=True)
+    if EDITION == "chrome":
+        _verify_uia_dependencies(destination / (INSTALL_DIRECTORY + ".exe"), environment)
     if EDITION == "voice":
         for device in ("cpu", "cuda"):
             target = destination / "runtime" / device
@@ -92,9 +115,10 @@ def main():
     shutil.copy2(ROOT / "THIRD_PARTY_NOTICES.md", destination / "THIRD_PARTY_NOTICES.md")
     import importlib.metadata
     licenses = destination / "licenses"
-    packages = ("PySide6-Essentials", "shiboken6", "numpy", "sherpa-onnx", "sherpa-onnx-core", "websocket-client", "pyinstaller")
+    packages = ("PySide6-Essentials", "shiboken6", "numpy", "sherpa-onnx", "sherpa-onnx-core", "websocket-client", "pyinstaller",
+                "pythonnet", "clr-loader", "cffi", "pycparser")
     if EDITION == "voice":
-        packages += ("ctranslate2", "sentencepiece", "PyAudioWPatch", "soxr", "pywebview", "pythonnet", "clr-loader", "cffi", "proxy-tools", "bottle", "typing-extensions", "pycparser")
+        packages += ("ctranslate2", "sentencepiece", "PyAudioWPatch", "soxr", "pywebview", "proxy-tools", "bottle", "typing-extensions")
     for package in packages:
         _copy_distribution_licenses(importlib.metadata.distribution(package), package, licenses)
     python_license = Path(sys.base_prefix) / "LICENSE.txt"

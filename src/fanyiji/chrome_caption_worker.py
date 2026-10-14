@@ -24,11 +24,16 @@ from .chrome_caption_runtime import (find_chrome, matches_installed_chrome, obse
 # Actual platform accessibility mappings still require validation on the user's Chrome.
 CAPTION_TITLES = frozenset({"Live Caption", "实时字幕"})
 ADDRESS_NAMES = frozenset({"Address and search bar", "地址和搜索栏", "地址栏和搜索栏"})
+# IDS_LIVE_CAPTION_BUBBLE_ERROR, verified against Chromium 155.0.8059.40
+# components/live_caption_strings.grdp and components_strings_{en-GB,zh-CN}.xtb.
+CAPTION_ENGINE_ERRORS = frozenset({"Live Caption is not available right now",
+                                   "Live Caption is not available at the moment",
+                                   "暂时无法使用实时字幕功能"})
 _PROBE_STAGES = frozenset({"adapter_init", "windows", "address_scan", "address_walk", "caption_read",
                            "caption_walk", "address_recheck", "reader"})
 _ERROR_TYPES = frozenset({"none", "tree_limit", "runtime_error", "attribute_error", "type_error", "value_error",
                          "os_error", "unsupported_pattern", "element_unavailable", "permission_denied",
-                         "interop_error", "assembly_missing", "other_error"})
+                         "interop_error", "assembly_missing", "dependency_missing", "other_error"})
 _CLASS_KINDS = frozenset({"RootView", "BrowserView", "ToolbarView", "LocationBarView", "OmniboxViewViews",
                          "TabStrip", "TabStripRegionView", "TabStripFlatEdgeButton", "Chrome_WidgetWin_1",
                          "Chrome_RenderWidgetHostHWND", "WebView", "RenderWidgetHostViewAura", "other"})
@@ -59,7 +64,8 @@ def safe_diagnostic(value):
 
 def exception_diagnostic(error, stage):
     # Never inspect str(error), Message, Data, Name, URL or a provider's arbitrary class name.
-    names = {"RuntimeError": "runtime_error", "AttributeError": "attribute_error", "TypeError": "type_error",
+    names = {"ModuleNotFoundError": "dependency_missing", "ImportError": "dependency_missing",
+             "RuntimeError": "runtime_error", "AttributeError": "attribute_error", "TypeError": "type_error",
              "ValueError": "value_error", "OSError": "os_error", "InvalidOperationException": "unsupported_pattern",
              "ElementNotAvailableException": "element_unavailable", "UnauthorizedAccessException": "permission_denied",
              "COMException": "interop_error", "ArgumentException": "interop_error",
@@ -106,6 +112,24 @@ def _load_uia_references(clr, *, runtime_directory=None, windows_directory=None)
         raise RuntimeError("uia_unavailable") from None
 
 
+def _initialize_uia_types():
+    """Load the actual CLR/UIA components without touching a browser or UI tree."""
+    if os.name != "nt":
+        raise RuntimeError("unsupported_platform")
+    import clr
+    _load_uia_references(clr)
+    from System import IntPtr
+    from System.Windows.Automation import AutomationElement, ControlType, TextPattern, TreeWalker, ValuePattern
+    return IntPtr, AutomationElement, ControlType, TextPattern, TreeWalker, ValuePattern
+
+
+def check_uia_dependencies():
+    """Use the adapter's real initialization path, without enumerating windows."""
+    _initialize_uia_types()
+    return {"uia_dependencies": "passed", "windows_enumerated": False,
+            "browser_opened": False, "profile_read": False}
+
+
 @dataclass(frozen=True)
 class NativeWindow:
     handle: int
@@ -138,14 +162,19 @@ class CaptionReader:
             return "source_unverified", None
         if len(captions) != 1:
             return "waiting_caption", None
-        text = self.adapter.caption_text(captions[0].handle)
-        if not isinstance(text, str) or len(text) > 4000 or any(ord(char) < 32 and char not in "\n\r\t" for char in text):
+        probe = getattr(self.adapter, "caption_engine_status", None)
+        engine_status = probe(captions[0].handle) if callable(probe) else None
+        text = None if engine_status == "caption_engine_unavailable" else self.adapter.caption_text(captions[0].handle)
+        if engine_status != "caption_engine_unavailable" and (not isinstance(text, str) or len(text) > 4000
+                or any(ord(char) < 32 and char not in "\n\r\t" for char in text)):
             return "waiting_caption", None
         # Native page navigation can race the UIA text read; an editable draft is not a URL commit.
         after_url, after_tabs, after_editing = self.adapter.browser_source(browsers[0].handle)
         if (type(after_tabs) is not int or after_tabs != 1 or type(after_editing) is not bool or after_editing
                 or not observed_source_matches(after_url, self.source_url)):
             return "source_unverified", None
+        if engine_status == "caption_engine_unavailable":
+            return engine_status, None
         return "caption_found", (str(captions[0].handle), text)
 
 
@@ -199,11 +228,14 @@ class AttachedCaptionReader:
         if not captions:
             return "waiting_caption", None
         try:
-            text = self.adapter.caption_text(captions[0].handle)
+            probe = getattr(self.adapter, "caption_engine_status", None)
+            engine_status = probe(captions[0].handle) if callable(probe) else None
+            text = None if engine_status == "caption_engine_unavailable" else self.adapter.caption_text(captions[0].handle)
         except Exception as error:
             self.last_diagnostic = {**exception_diagnostic(error, "caption_read"), **counts, "caption_count": len(captions)}
             return "uia_unavailable", None
-        if not isinstance(text, str) or len(text) > 4000 or any(ord(char) < 32 and char not in "\n\r\t" for char in text):
+        if engine_status != "caption_engine_unavailable" and (not isinstance(text, str) or len(text) > 4000
+                or any(ord(char) < 32 and char not in "\n\r\t" for char in text)):
             return "waiting_caption", None
         # This checks target-page continuity only; never call it caption-source proof.
         try:
@@ -215,6 +247,8 @@ class AttachedCaptionReader:
                 or not observed_source_matches(address, self.source_url)
                 or not self.adapter.process_verified(browser.process_id)):
             return "source_unverified", None
+        if engine_status == "caption_engine_unavailable":
+            return engine_status, None
         return "caption_found_unverified", (str(captions[0].handle), text)
 
 
@@ -225,10 +259,7 @@ class NativeUiaAdapter:
         if os.name != "nt":
             raise RuntimeError("unsupported_platform")
         from ctypes import wintypes
-        import clr
-        _load_uia_references(clr)
-        from System import IntPtr
-        from System.Windows.Automation import AutomationElement, ControlType, TextPattern, TreeWalker, ValuePattern
+        IntPtr, AutomationElement, ControlType, TextPattern, TreeWalker, ValuePattern = _initialize_uia_types()
         self.IntPtr, self.Element, self.ControlType = IntPtr, AutomationElement, ControlType
         self.TextPattern, self.ValuePattern, self.Walker = TextPattern, ValuePattern, TreeWalker.RawViewWalker
         self.pid = browser_pid
@@ -408,6 +439,51 @@ class NativeUiaAdapter:
         # StaticText nodes are visual folds of the label, not semantic sentence boundaries.
         return "".join(lines)
 
+    def caption_engine_status(self, handle):
+        """Inspect fixed native error labels; never treat spoken caption text as an error."""
+        root = self._element(handle)
+        if hasattr(self, "user"):
+            title, window_class = ctypes.create_unicode_buffer(256), ctypes.create_unicode_buffer(128)
+            self.user.GetWindowTextW(handle, title, len(title))
+            self.user.GetClassNameW(handle, window_class, len(window_class))
+            if title.value not in CAPTION_TITLES or not window_class.value.startswith("Chrome_WidgetWin_"):
+                return None
+        stack, count = [(root, 0)], 0
+        while stack:
+            element, depth = stack.pop()
+            count += 1
+            if count > 256 or depth > 16:
+                raise CaptionProbeError("caption_walk", "tree_limit", node_count=count, depth=depth)
+            current = element.Current
+            kind, class_name = current.ControlType, str(getattr(current, "ClassName", ""))
+            if (bool(getattr(current, "IsOffscreen", False))
+                    or kind == self.ControlType.Document
+                    or class_name in {"CaptionBubbleLabel", "Chrome_RenderWidgetHostHWND", "WebView", "RenderWidgetHostViewAura"}
+                    or kind in tuple(getattr(self.ControlType, name, None)
+                                     for name in ("Button", "Link", "Hyperlink", "Edit", "ComboBox", "Menu", "MenuItem",
+                                                  "CheckBox", "RadioButton", "ScrollBar", "Image", "Tab", "TabItem"))):
+                continue
+            if kind == self.ControlType.Text:
+                # Chromium Views' IsOffscreen is always false. RawView can still
+                # expose an invisible Label; native UIA control/content flags
+                # exclude that label using its invisible/ignored AX state.
+                if (getattr(current, "IsControlElement", None) is not True
+                        or getattr(current, "IsContentElement", None) is not True):
+                    continue
+                name = str(current.Name or "")
+                if len(name) <= 160 and " ".join(name.split()) in CAPTION_ENGINE_ERRORS:
+                    return "caption_engine_unavailable"
+                continue
+            children = []
+            child = self.Walker.GetFirstChild(element)
+            while child is not None:
+                children.append(child)
+                if len(children) > 128:
+                    raise CaptionProbeError("caption_walk", "tree_limit", node_count=count, depth=depth)
+                child = self.Walker.GetNextSibling(child)
+            stack.extend((child, depth + 1) for child in reversed(children))
+        return None
+
     def close(self):
         processes, self._processes = self._processes, {}
         for process in processes.values():
@@ -491,6 +567,7 @@ def main(argv=None) -> int:
     parser.add_argument("--session", type=int, default=0)
     parser.add_argument("--source-url", default="")
     parser.add_argument("--smoke-test", action="store_true")
+    parser.add_argument("--dependency-check", action="store_true")
     parser.add_argument("--owned-browser-pid", type=int, default=0)
     args = parser.parse_args(argv)
     from .process_utils import _pipe
@@ -504,6 +581,20 @@ def main(argv=None) -> int:
 
     if args.session < 0 or args.generation < 0:
         return fail("source_unverified")
+    if args.dependency_check:
+        # No native adapter/source selection: this checks the frozen CLR/DLL/FFI
+        # dependencies without observing any user window, account or profile.
+        try:
+            result = check_uia_dependencies()
+        except Exception as error:
+            sink.write(json.dumps({"kind": "diagnostic", **exception_diagnostic(error, "adapter_init"),
+                                   "session": args.session, "generation": args.generation}) + "\n")
+            sink.flush()
+            return 1
+        sink.write(json.dumps({"kind": "dependency_check", **result,
+                               "session": args.session, "generation": args.generation}) + "\n")
+        sink.flush()
+        return 0
     if args.smoke_test:
         # Pure NDJSON fixture: no Chrome, native UIA, networking, audio or profile writes.
         from types import SimpleNamespace
@@ -533,10 +624,11 @@ def main(argv=None) -> int:
             time.sleep(0.25)
         return 0
     except Exception as error:
-        sink.write(json.dumps({"kind": "diagnostic", **exception_diagnostic(error, "adapter_init"),
+        diagnostic = exception_diagnostic(error, "adapter_init")
+        sink.write(json.dumps({"kind": "diagnostic", **diagnostic,
                                "session": args.session, "generation": args.generation}) + "\n")
         sink.flush()
-        return fail("uia_unavailable")
+        return fail("dependency_missing" if diagnostic["error_type"] == "dependency_missing" else "uia_unavailable")
     finally:
         if adapter is not None:
             adapter.close()

@@ -112,7 +112,7 @@ def test_same_model_explicit_retry_replaces_finished_worker_without_page_reload(
     assert len(value.h.events) == events + 1
 
 
-def test_recover_stops_before_reload_and_old_generation_callbacks_are_ignored(audio_browser):
+def test_recover_stops_before_owned_restart_and_old_generation_callbacks_are_ignored(audio_browser):
     value = audio_browser
     value.service.configure_audio_processing("gtcrn")
     open_browser(value.h)
@@ -123,8 +123,8 @@ def test_recover_stops_before_reload_and_old_generation_callbacks_are_ignored(au
     assert second.options["generation"] > first.options["generation"]
     trace = value.h.trace
     stop_index = trace.index(("audio.stop", first.options["generation"]))
-    reload_index = trace.index(("page.call", "Page.reload"))
-    assert stop_index < reload_index
+    launch_index = next(index for index, item in reversed(list(enumerate(trace))) if item[0] == "process.launch")
+    assert stop_index < launch_index
     events = len(value.h.events)
     first.emit_status()
     assert len(value.h.events) == events

@@ -70,6 +70,45 @@ def test_startup_does_not_initialize_audio_browser_or_reader(harness):
     assert not hasattr(harness.controller, "specialized")
 
 
+@pytest.mark.parametrize("hidden", [False, True])
+def test_transport_restart_rebinds_caption_reader_without_changing_hidden_preference(harness, hidden):
+    browser, reader = connect_fixture(harness)
+    controller = harness.controller
+    controller._chrome_browser_mode = "dedicated"
+    controller._chrome_active_url = "https://live.bilibili.com/1698225"
+    controller._chrome_hide_caption = hidden
+    controller._chrome_initial_capture_room = "1698225"
+    browser.restart_danmaku_transport = Mock(return_value=4321)
+    controller._recover_chrome_danmaku_transport(browser)
+    browser.restart_danmaku_transport.assert_called_once()
+    reader.start.assert_called_once_with(controller._chrome_active_url, session=controller.epoch,
+                                         owned_browser_pid=4321)
+    assert controller._chrome_hide_caption is hidden
+    assert controller._chrome_initial_capture_room == ""
+    assert not (harness.directory / "chrome-caption-settings.json").exists()
+    if hidden:
+        browser.set_caption_hidden.assert_called_once_with(True)
+    else:
+        browser.set_caption_hidden.assert_not_called()
+
+
+def test_transport_restart_from_stale_browser_or_paused_session_is_ignored(harness):
+    browser, reader = connect_fixture(harness)
+    controller = harness.controller
+    controller._chrome_browser_mode = "dedicated"
+    controller._chrome_active_url = "https://live.bilibili.com/1698225"
+    browser.restart_danmaku_transport = Mock(return_value=4321)
+    controller._recover_chrome_danmaku_transport(SimpleNamespace())
+    controller.paused = True
+    controller._recover_chrome_danmaku_transport(browser)
+    browser.restart_danmaku_transport.assert_not_called()
+    reader.start.assert_not_called()
+    assert controller._chrome_transport_recovery_waiting is browser
+    controller.set_paused(False)
+    browser.restart_danmaku_transport.assert_called_once()
+    assert controller._chrome_transport_recovery_waiting is None
+
+
 @pytest.mark.parametrize("language", ["zh-CN", "ja", "en"])
 @pytest.mark.parametrize("frozen", [False, True])
 def test_smoke_checks_public_controls_without_browser_or_userdata(application, tmp_path, monkeypatch, capsys, language, frozen):
@@ -185,7 +224,6 @@ def test_recover_bubble_cancels_hide_preference(harness):
     assert not controller._chrome_hide_caption
     saved = json.loads((harness.directory / "chrome-caption-settings.json").read_text(encoding="utf-8"))
     assert saved["hide_caption"] is False
-    browser.set_caption_hidden.assert_called_once_with(False)
     browser.recover_caption.assert_called_once()
 
 

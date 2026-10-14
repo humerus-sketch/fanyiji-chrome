@@ -40,12 +40,13 @@ def checked_archive(path: Path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", type=Path, default=ROOT / "dist")
+    parser.add_argument("--build-dir", type=Path, default=ROOT / "dist")
     args = parser.parse_args()
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
     import tomllib
     version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
-    folder = ROOT / "dist" / APP_NAME
+    folder = args.build_dir.resolve() / APP_NAME
     build = json.loads((folder / "build-info.json").read_text(encoding="utf-8"))
     assert build["application"] == APP_ID and build["edition"] == "chrome" and build["models_bundled"] is False
     assert (folder / (APP_NAME + ".exe")).is_file()

@@ -4,7 +4,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 root = Path(SPECPATH)
-native_packages = ("sherpa_onnx",)
+native_packages = ("sherpa_onnx", "pythonnet", "clr_loader")
 binaries = []
 datas = []
 for package in native_packages:
@@ -16,9 +16,10 @@ a = Analysis(
     pathex=[str(root / "src")],
     binaries=binaries,
     datas=datas,
-    hiddenimports=["numpy", "sherpa_onnx", "sherpa_onnx.lib._sherpa_onnx"],
+    hiddenimports=["numpy", "sherpa_onnx", "sherpa_onnx.lib._sherpa_onnx",
+                   "clr", "pythonnet", "clr_loader", "clr_loader.netfx", "cffi", "_cffi_backend", "pycparser"],
     excludes=["torch", "transformers", "huggingface_hub", "pytest", "tkinter", "matplotlib",
-              "webview", "clr", "clr_loader", "ctranslate2", "sentencepiece", "pyaudiowpatch", "soxr",
+              "webview", "ctranslate2", "sentencepiece", "pyaudiowpatch", "soxr",
               "fanyiji.pipeline", "fanyiji.asr_engine", "fanyiji.engines", "fanyiji.gguf_engine",
               "fanyiji.browser_helper", "fanyiji.live_source_service", "fanyiji.specialized_model"],
     noarchive=False,

@@ -14,8 +14,8 @@ import time
 from .chrome_caption_runtime import find_chrome, source_room, validate_source_url
 
 
-_STATUS_CODES = frozenset({"starting", "waiting_browser", "manual_caption_settings", "waiting_caption", "caption_found", "caption_found_unverified", "source_ambiguous", "source_unverified", "chrome_missing", "browser_missing",
-                           "uia_unavailable", "unsupported_platform", "reader_failed", "reader_recovering", "browser_closed", "stopped"})
+_STATUS_CODES = frozenset({"starting", "waiting_browser", "manual_caption_settings", "waiting_caption", "caption_found", "caption_found_unverified", "caption_engine_unavailable", "source_ambiguous", "source_unverified", "chrome_missing", "browser_missing",
+                           "uia_unavailable", "dependency_missing", "unsupported_platform", "reader_failed", "reader_recovering", "browser_closed", "stopped"})
 
 
 class ChromeCaptionError(RuntimeError):
@@ -59,6 +59,7 @@ class ChromeCaptionService:
         self._retry_at = None
         self._recovery_disabled = False
         self._reader_state = "stopped"
+        self._caption_status = "stopped"
         self._connected = False
         self._reader_serial = 0
 
@@ -82,7 +83,8 @@ class ChromeCaptionService:
                     "snapshot_age_seconds": age(self._last_snapshot_at),
                     "caption_update_age_seconds": age(self._last_update_at),
                     "recovery_attempts": self._recoveries, "reader_recovery_state": self._reader_state,
-                    "caption_state": "disconnected" if not self._connected else
+                    "caption_state": "caption_engine_unavailable" if self._caption_status == "caption_engine_unavailable" else
+                        "disconnected" if not self._connected else
                         "waiting" if self._last_update_at is None else
                         "unchanged" if now - self._last_update_at >= 2.0 else "updated"}
 
@@ -159,6 +161,7 @@ class ChromeCaptionService:
                 self._recoveries, self._retry_at = 0, None
                 self._recovery_disabled, self._connected = False, False
                 self._reader_state = "waiting"
+                self._caption_status = "waiting_caption" if url else "waiting_browser"
             if not url:
                 self._emit({"kind": "status", "code": "waiting_browser"}, generation)
                 return
@@ -196,6 +199,7 @@ class ChromeCaptionService:
         self._revision_offset = self._last_revision
         self._retry_at = None
         self._reader_state = "waiting"
+        self._caption_status = "waiting_caption"
         threading.Thread(target=self._read, args=(self._worker, generation),
                          name="chrome-caption-pipe", daemon=True).start()
 
@@ -215,6 +219,7 @@ class ChromeCaptionService:
             else:
                 self._retry_at = self._clock() + min(4.0, 2.0 ** self._recoveries)
                 self._reader_state = "backoff"
+            self._caption_status = "reader_failed" if exhausted else "reader_recovering"
         self._emit({"kind": "status", "code": "reader_failed" if exhausted else "reader_recovering"}, generation)
         if self._auto_restart:
             self._emit_health(generation)
@@ -302,6 +307,8 @@ class ChromeCaptionService:
             self._last_caption_identity = identity
             self._last_caption_text = value["text"]
             self._connected = value["connected"]
+            if value["connected"]:
+                self._caption_status = "caption_found_unverified"
             self._last_revision = self._revision_offset + value["revision"]
             return {**value, "source_epoch": self._stream_epoch, "revision": self._last_revision}
 
@@ -350,12 +357,19 @@ class ChromeCaptionService:
                         and value["code"] in _STATUS_CODES):
                     if not self._received(worker, generation):
                         break
+                    with self._lock:
+                        if self._worker is not worker or generation != self._generation:
+                            break
+                        self._caption_status = value["code"]
                     self._emit({"kind": "status", "code": value["code"]}, generation, worker=worker)
-                    terminal_status = value["code"] in ("browser_closed", "unsupported_platform")
+                    terminal_status = value["code"] in ("browser_closed", "unsupported_platform", "dependency_missing")
                     if terminal_status:
                         with self._lock:
                             if self._worker is worker and generation == self._generation:
                                 self._recovery_disabled = True
+                        if value["code"] == "dependency_missing":
+                            # Restarting the same incomplete package cannot repair a missing module.
+                            break
                 elif (value.get("kind") == "heartbeat"
                       and type(value.get("observed_at")) in (int, float)
                       and math.isfinite(value["observed_at"]) and value["observed_at"] >= 0
@@ -368,6 +382,10 @@ class ChromeCaptionService:
                               for field in ("snapshot_age_seconds", "caption_update_age_seconds"))):
                     if not self._received(worker, generation):
                         break
+                    with self._lock:
+                        if self._worker is not worker or generation != self._generation:
+                            break
+                        self._caption_status = value["status"]
                     self._emit_health(generation)
                 elif (value.get("kind") == "snapshot" and type(value.get("revision")) is int
                       and value["revision"] >= 0 and isinstance(value.get("text"), str)
@@ -444,6 +462,7 @@ class ChromeCaptionService:
                 self._worker_args = None
                 self._retry_at = None
                 self._reader_state = "stopped"
+                self._caption_status = "stopped"
                 self._connected = False
             if watcher is not None:
                 watcher.set()

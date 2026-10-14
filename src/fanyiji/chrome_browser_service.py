@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import ctypes
 import json
 import logging
 import os
 from pathlib import Path
 import subprocess
+import stat
 import threading
 import time
 
@@ -17,7 +19,147 @@ from .chrome_cdp import CdpConnection, ChromeControlError, local_json, loopback_
 from .danmaku_protocol import (MIN_SEND_INTERVAL_SECONDS, login_script, presence_script, send_script,
                                sanitize_check, sanitize_login, sanitize_receipt, validate_danmaku_command)
 from .local_features import danmaku_available
-from .paths import data_root, models_root
+from .identity import APP_ID
+from .paths import data_root, models_root, path_override
+
+
+def _existing_short_profile(physical: Path) -> Path:
+    """Use an existing verified 8.3 alias; never create names or expand the result."""
+    if os.name != "nt":
+        return physical
+    try:
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        get_short = kernel.GetShortPathNameW
+        get_short.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+        get_short.restype = wintypes.DWORD
+        size = get_short(str(physical), None, 0)
+        if not 0 < size <= 32768:
+            return physical
+        buffer = ctypes.create_unicode_buffer(size)
+        written = get_short(str(physical), buffer, size)
+        if not 0 < written < size or written != len(buffer.value):
+            return physical
+        candidate = Path(buffer.value)
+        if not candidate.is_absolute() or len(str(candidate)) >= len(str(physical)):
+            return physical
+        # Real 8.3 names are ordinary directory aliases, not junctions. Check
+        # their chain and compare metadata without opening any account values.
+        for directory in (candidate, *candidate.parents, candidate / "Default"):
+            value = directory.lstat()
+            if not stat.S_ISDIR(value.st_mode) or getattr(value, "st_file_attributes", 0) & 0x400:
+                return physical
+        if not candidate.samefile(physical):
+            return physical
+        for relative in (Path("Local State"), Path("Default/Preferences")):
+            short_marker, long_marker = candidate / relative, physical / relative
+            for marker in (short_marker, long_marker):
+                value = marker.lstat()
+                if (not stat.S_ISREG(value.st_mode) or getattr(value, "st_file_attributes", 0) & 0x400
+                        or value.st_nlink != 1):
+                    return physical
+            if not short_marker.samefile(long_marker):
+                return physical
+        # resolve() would turn this verified short alias back into the long path.
+        return candidate
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError):
+        return physical
+
+
+def resolve_external_profile(profile: Path) -> Path:
+    """Select a verified MSIX file alias for external Chrome, keeping logical ownership."""
+    profile = Path(profile)
+    try:
+        logical = profile.resolve()
+    except (OSError, ValueError, RuntimeError):
+        logical = profile.absolute()
+
+    def regular(path: Path) -> bool:
+        value = path.lstat()
+        return (stat.S_ISREG(value.st_mode) and not getattr(value, "st_file_attributes", 0) & 0x400
+                and value.st_nlink == 1)
+
+    def directory(path: Path) -> bool:
+        value = path.lstat()
+        return stat.S_ISDIR(value.st_mode) and not getattr(value, "st_file_attributes", 0) & 0x400
+
+    try:
+        if path_override("DATA") is not None:
+            return logical
+        local = os.environ.get("LOCALAPPDATA")
+        if not local or not Path(local).is_absolute():
+            return logical
+        local_root = Path(local).absolute()
+        owner = local_root / APP_ID
+        default = owner / "chrome-caption" / "dedicated-profile"
+        if profile.absolute() != default or data_root().absolute() != owner:
+            return logical
+        state = profile / "Local State"
+        preferences = profile / "Default" / "Preferences"
+        if not regular(state) or not regular(preferences):
+            return logical
+        physical_state = state.resolve(strict=True)
+        physical_preferences = preferences.resolve(strict=True)
+        physical = physical_state.parent
+        if physical == logical:
+            return logical
+        relative = physical.relative_to(local_root / "Packages")
+        expected_tail = ("LocalCache", "Local", APP_ID, "chrome-caption", "dedicated-profile")
+        if (len(relative.parts) != 6 or tuple(part.casefold() for part in relative.parts[1:])
+                != tuple(part.casefold() for part in expected_tail)
+                or physical_state.name != "Local State"
+                or physical_preferences != physical / "Default" / "Preferences"):
+            return logical
+        # A filesystem junction must not masquerade as Windows file virtualization.
+        directories = [owner, profile.parent, profile, preferences.parent, local_root / "Packages"]
+        candidate = local_root / "Packages"
+        for part in relative.parts:
+            candidate = candidate / part
+            directories.append(candidate)
+        directories.append(physical_preferences.parent)
+        if not all(directory(path) for path in directories):
+            return logical
+        if not regular(physical_state) or not regular(physical_preferences):
+            return logical
+        if not state.samefile(physical_state) or not preferences.samefile(physical_preferences):
+            return logical
+        # Recheck link flags after identity comparison; no marker contents or cookies are read.
+        if not all(regular(path) for path in (state, preferences, physical_state, physical_preferences)):
+            return logical
+        return _existing_short_profile(physical)
+    except (OSError, ValueError, RuntimeError):
+        return logical
+
+
+def _rebase_caption_resource_paths(profile: Path, captions: dict) -> int:
+    """A migrated profile must not keep depending on the retired profile's SODA files."""
+    local = os.environ.get("LOCALAPPDATA")
+    if not local:
+        return 0
+    legacy = (Path(local) / "LocalJaZhSubtitles" / "chrome-caption" / "dedicated-profile").resolve()
+    destination = profile.resolve()
+    changed = 0
+    for key in ("soda_binary_path", "soda_en_us_config_path", "soda_ja_jp_config_path", "soda_zh_cn_config_path"):
+        raw = captions.get(key)
+        if not isinstance(raw, str) or not raw:
+            continue
+        try:
+            relative = Path(raw).resolve().relative_to(legacy)
+            expected_folder = "SODA" if key == "soda_binary_path" else "SODALanguagePacks"
+            if not relative.parts or relative.parts[0] != expected_folder:
+                continue
+            replacement = (destination / relative).resolve()
+            if not replacement.is_relative_to(destination):
+                continue
+            available = (replacement.is_file() and replacement.stat().st_size > 0
+                         if key == "soda_binary_path" else
+                         replacement.is_dir() and any(item.is_file() for item in replacement.iterdir()))
+            if available and str(replacement) != raw:
+                captions[key] = str(replacement)
+                changed += 1
+        except (OSError, ValueError):
+            continue
+    return changed
 
 
 def seed_caption_preferences(profile: Path) -> None:
@@ -40,6 +182,9 @@ def seed_caption_preferences(profile: Path) -> None:
     state_path = profile / "Local State"
     state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.is_file() else {}
     packs = state.setdefault("accessibility", {}).setdefault("captions", {})
+    repaired = _rebase_caption_resource_paths(profile, packs)
+    if repaired:
+        logging.info("CHROME_CAPTION resource_paths_rebased count=%s", repaired)
     registered = packs.get("soda_registered_language_packs", [])
     if not isinstance(registered, list):
         raise ChromeControlError("profile_invalid")
@@ -56,6 +201,7 @@ class ChromeBrowserService(QObject):
     event = Signal(dict)
     danmaku_result = Signal(dict)
     danmaku_status = Signal(dict)
+    danmaku_transport_recovery_requested = Signal()
 
     def __init__(self, parent=None, *, profile=None, process_factory=None, chrome_finder=None,
                  connector=None, json_reader=None, protect=True):
@@ -76,6 +222,8 @@ class ChromeBrowserService(QObject):
         self._requests = set()
         self._next_send = 0.0
         self._unknown_send = None
+        self._unknown_submissions = {}
+        self._transport_recovery_notified = False
         self.room = self.url = ""
         self.active_version = None
         self.danmaku_available = danmaku_available()
@@ -213,9 +361,11 @@ class ChromeBrowserService(QObject):
                 seed_caption_preferences(self.profile)
                 if port_file.exists():
                     port_file.unlink()
+                from .process_utils import external_chrome_environment
                 options = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
-                           "stderr": subprocess.DEVNULL, "shell": False}
-                args = [str(chrome), "--user-data-dir=" + str(self.profile.resolve()),
+                           "stderr": subprocess.DEVNULL, "shell": False,
+                           "env": external_chrome_environment()}
+                args = [str(chrome), "--user-data-dir=" + str(resolve_external_profile(self.profile)),
                         "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0",
                         "--no-first-run", "--no-default-browser-check", "--new-window", url]
                 if self._protect and os.name == "nt":
@@ -306,12 +456,18 @@ class ChromeBrowserService(QObject):
         with self._operation:
             self._hide_requested = hidden
             if not hidden:
+                restored = False
                 if self._visibility:
+                    was_hidden = getattr(self._visibility, "hidden", False) is True
                     self._visibility.close()
+                    restored = was_hidden and getattr(self._visibility, "last_status", None) == "restored"
                     self._visibility = None
-                if self._visibility_notified != "visible":
-                    self._emit("caption_visible")
-                    self._visibility_notified = "visible"
+                status = "visible" if restored else "unhidden"
+                if self._visibility_notified != status:
+                    # Cancelling a hide request does not create a bubble. Only a
+                    # verified restoration of an existing snapshot means visible.
+                    self._emit("caption_visible" if restored else "caption_unhidden")
+                    self._visibility_notified = status
                 return
             if not self.is_browser_ready or self.job is None:
                 return
@@ -331,14 +487,70 @@ class ChromeBrowserService(QObject):
         with self._operation:
             if not self.is_browser_ready:
                 raise ChromeControlError()
-            # Recovery cancels automatic hiding; the monitor must not hide the rebuilt bubble again.
-            self.set_caption_hidden(False)
+            url = self.url
             self._room_target()
-            self._stop_audio_processing()
-            self._page.call("Page.reload", {"ignoreCache": False})
-            self._generation += 1
+            # Chrome's close button closes its caption model, independently of
+            # our opacity setting. Reopen the same owned profile to rebuild that
+            # model and re-enable its saved caption preferences while stopped.
+            self.set_caption_hidden(False)
+            self._ready = False
+            pid = self.open_sync(url)
             self._emit("caption_recovering")
-            self._start_audio_processing()
+            return pid
+
+    def _submission_transport_settled(self, record):
+        if record["settled"]:
+            return True
+        process = record["process"]
+        if process is not None and process.poll() is not None:
+            record["settled"], record["process"] = True, None
+            return True
+        return False
+
+    def _submission_guard_blocks(self, room, text):
+        key = (room, text)
+        if key in self._unknown_submissions:
+            return True
+        return any(not record["retired"] or not self._submission_transport_settled(record)
+                   for record in self._unknown_submissions.values())
+
+    def _refresh_submission_guard(self):
+        self._uncertain = bool(self._unknown_submissions)
+        latest = next(reversed(self._unknown_submissions), None)
+        self._unknown_send = ((latest[0], latest[1], self._unknown_submissions[latest]["before"])
+                              if latest is not None else None)
+
+    def retire_danmaku_submission(self, room, text):
+        """Keep the exact unknown payload fenced after its durable FIFO handoff."""
+        recover = False
+        with self._operation:
+            record = self._unknown_submissions.get((room, text))
+            if record is None:
+                return False
+            record["retired"] = True
+            if (not self._submission_transport_settled(record) and not self._closed
+                    and self.is_browser_ready and not self._transport_recovery_notified):
+                self._transport_recovery_notified = True
+                recover = True
+        if recover:
+            # The controller rebuilds its reader around the new owned PID too.
+            self.danmaku_transport_recovery_requested.emit()
+        return True
+
+    def restart_danmaku_transport(self):
+        """Only rebuild an already opened owned browser with an unsettled POST."""
+        with self._operation:
+            if (self._closed or not self.is_browser_ready or not self.url
+                    or not any(record["retired"] and not self._submission_transport_settled(record)
+                               for record in self._unknown_submissions.values())):
+                return 0
+            url = self.url
+            self._room_target()
+            self._ready = False
+            pid = self.open_sync(url)
+            self._transport_recovery_notified = False
+            self._emit("danmaku_transport_recovered")
+            return pid
 
     def request_danmaku(self, operation, request_id, room, text=""):
         if not self.danmaku_available or not self.is_browser_ready or request_id in self._requests or len(self._requests) >= 64:
@@ -350,6 +562,12 @@ class ChromeBrowserService(QObject):
             validate_danmaku_command(command)
         except (ValueError, TypeError):
             return False
+        if operation == "send":
+            with self._operation:
+                if ((room, text) not in self._unknown_submissions
+                        and any(record["retired"] and not self._submission_transport_settled(record)
+                                for record in self._unknown_submissions.values())):
+                    return False  # Keep the following FIFO row while recovery is pending.
         self._requests.add(request_id)
         self._executor.submit(self._send_command, command, self._generation)
         return True
@@ -360,7 +578,8 @@ class ChromeBrowserService(QObject):
         submission = None
         try:
             with self._operation:
-                if not self.is_browser_ready or generation != self._generation or operation == "send" and self._uncertain:
+                if (not self.is_browser_ready or generation != self._generation
+                        or operation == "send" and self._submission_guard_blocks(command["room"], command["text"])):
                     raise ChromeControlError("window_closed")
                 if command["room"] != self.room:
                     raise ChromeControlError("wrong_room")
@@ -385,8 +604,14 @@ class ChromeBrowserService(QObject):
                 if started:
                     # Only handing the send script to CDP can create an uncertain submission.
                     self._unknown_send = submission
+                    self._unknown_submissions[(command["room"], command["text"])] = {
+                        "before": before, "process": self.process, "settled": False, "retired": False}
                 result = self._page.call("Runtime.evaluate", {"expression": script, "awaitPromise": True,
                     "returnByValue": True, "userGesture": True, "timeout": 18000}, timeout=20)
+                if started:
+                    # An awaited JS result, including an AbortController error,
+                    # is terminal. A CDP/native timeout itself is not terminal.
+                    self._unknown_submissions[(command["room"], command["text"])]["settled"] = True
                 if "exceptionDetails" in result:
                     raise ChromeControlError("script_unavailable")
                 value = result.get("result", {}).get("value", {})
@@ -408,16 +633,16 @@ class ChromeBrowserService(QObject):
             result["outcome"] = "not_sent"
         with self._operation:
             if operation == "send" and started and self._unknown_send == submission:
-                self._uncertain = result.get("outcome") == "result_unknown"
-                if not self._uncertain:
-                    self._unknown_send = None
-            if operation == "check" and self._uncertain and self._unknown_send:
-                room, text, before = self._unknown_send
-                if (command["room"] == room and command["text"] == text and type(before) is int
+                if result.get("outcome") != "result_unknown":
+                    self._unknown_submissions.pop((command["room"], command["text"]), None)
+            if operation == "check":
+                record = self._unknown_submissions.get((command["room"], command["text"]))
+                before = record["before"] if record is not None else None
+                if (record is not None and type(before) is int
                         and result.get("present") is True and type(result.get("occurrence_count")) is int
                         and result["occurrence_count"] > before):
-                    self._uncertain = False
-                    self._unknown_send = None
+                    self._unknown_submissions.pop((command["room"], command["text"]), None)
+            self._refresh_submission_guard()
         self.danmaku_result.emit({"kind": "danmaku_result", "request_id": command["request_id"],
                                   "operation": operation, "result": result})
 

@@ -89,7 +89,7 @@ class ChromeCaptionDialog(QDialog):
         self.recover_caption_button.clicked.connect(self._request_recover_caption)
         caption_layout.addWidget(self.recover_caption_button)
         layout.addWidget(self.caption_controls)
-        layout.addWidget(_label("隐藏和恢复仅用于翻译姬打开的专用 Chrome；现有 Chrome 只读连接不能隐藏字幕或推送弹幕。恢复会取消隐藏，优先刷新专用直播页，不会自动打开 Chrome 设置。"))
+        layout.addWidget(_label("隐藏和恢复仅用于翻译姬打开的专用 Chrome；恢复会取消隐藏并重启专用 Chrome，重新打开当前直播间，保留登录状态。等待人声和字幕气泡出现后恢复读取。"))
         self.audio_controls = QWidget()
         audio_layout = QVBoxLayout(self.audio_controls)
         audio_layout.setContentsMargins(0, 0, 0, 0)

@@ -11,6 +11,8 @@
 | NumPy 2.5.3 | 可选音频增强的数据处理；[NumPy](https://github.com/numpy/numpy) |
 | sherpa-onnx 1.13.8 / ONNX Runtime 1.28.2 | 可选 GTCRN 语音增强；[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)、[ONNX Runtime](https://github.com/microsoft/onnxruntime) |
 | websocket-client 1.9.2 | 程序自有 Chrome 的本机 CDP 通道；[官方源码](https://github.com/websocket-client/websocket-client/) |
+| pythonnet 3.2.1 / clr-loader 0.3.1 | Windows UI Automation 所需 .NET Framework 互操作；[pythonnet](https://github.com/pythonnet/pythonnet)、[clr-loader](https://github.com/pythonnet/clr-loader) |
+| CFFI 2.1.1 / pycparser 3.11 | CLR 加载器的 FFI 运行时与声明解析；[CFFI](https://cffi.readthedocs.io/)、[pycparser](https://github.com/eliben/pycparser) |
 | PyInstaller 6.22.3 | 打包引导程序；[PyInstaller](https://github.com/pyinstaller/pyinstaller)，保留 `COPYING.txt` 与引导程序例外说明 |
 
 发行目录 `licenses` 保存安装依赖提供的许可原文。补充许可与对应来源位于源码 `third_party_licenses`，构建复制到 `licenses/supplemental`；`MANIFEST.json` 记录原始来源、版本、大小与 SHA-256，不包含本机路径或用户资料。

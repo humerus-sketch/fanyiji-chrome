@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import ctypes
 import io
 import logging
+import ntpath
 import os
 import subprocess
 import sys
@@ -12,6 +13,30 @@ import threading
 
 LOGGER = logging.getLogger(__name__)
 _DLL_LAUNCH_LOCK = threading.Lock()
+
+
+def external_chrome_environment() -> dict[str, str]:
+    """Keep Qt's bundled DLL paths out of external Chrome and its utilities."""
+    environment = os.environ.copy()
+    bundle = getattr(sys, "_MEIPASS", None)
+    if not getattr(sys, "frozen", False) or not isinstance(bundle, str) or not ntpath.isabs(bundle):
+        return environment
+    root = ntpath.normcase(ntpath.normpath(bundle))
+
+    def bundled(entry: str) -> bool:
+        candidate = ntpath.normcase(ntpath.normpath(ntpath.expandvars(entry.strip().strip('"'))))
+        try:
+            return ntpath.commonpath((root, candidate)) == root
+        except ValueError:
+            # Relative paths or a different drive/share are not bundle entries.
+            return False
+
+    for key, value in environment.items():
+        if key.casefold() == "path":
+            # Preserve ordering, spelling and empty/system/user entries. Only
+            # the child's copy changes; our Qt and native helpers keep theirs.
+            environment[key] = ";".join(entry for entry in value.split(";") if not bundled(entry))
+    return environment
 
 
 class _WindowsJob:

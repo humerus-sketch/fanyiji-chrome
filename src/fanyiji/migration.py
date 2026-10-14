@@ -13,6 +13,7 @@ import sqlite3
 import stat
 from .identity import EDITION
 from .paths import data_root, path_override
+from .chrome_component_permissions import repair_component_permissions
 
 _COMMON = ("danmaku-content-filter.json", "danmaku-wordlist.json", "local-features.json")
 _CACHE_NAMES = {"Cache", "Code Cache", "GPUCache", "ShaderCache", "GrShaderCache", "Crashpad", "BrowserMetrics"}
@@ -45,6 +46,10 @@ def _copy_directory(source: Path, target: Path) -> bool:
         raise OSError("Interrupted profile migration exists; no existing data was overwritten.")
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source, staging, ignore=shutil.ignore_patterns(*_CACHE_NAMES, "Singleton*", "DevToolsActivePort"))
+    if EDITION == "chrome" and target.name == "chrome-caption":
+        # copytree does not retain the component installer's Users RX ACL.
+        # Repair only the copied SODA trees before exposing the new profile.
+        repair_component_permissions(staging / "dedicated-profile")
     os.replace(staging, target)
     return True
 

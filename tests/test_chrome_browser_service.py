@@ -397,11 +397,13 @@ def test_caption_recovery_does_not_release_unknown_submission_guard(harness):
     unknown = harness.service._unknown_send
     generation = harness.service.generation
     harness.service.recover_caption()
+    old_page, page = page, harness.service._page
+    assert old_page.closed and page is not old_page
     assert harness.service.generation > generation
     assert harness.service._uncertain and harness.service._unknown_send == unknown
     harness.state.now += 4
     submit(harness, request_id="after-recovery")
-    assert len(send_evaluations(page)) == 1 and harness.service._uncertain
+    assert len(send_evaluations(old_page)) == 1 and not send_evaluations(page) and harness.service._uncertain
     page.values.append({"result": {"value": check_receipt()}})
     submit(harness, "check", request_id="verify-after-recovery")
     assert not harness.service._uncertain and harness.service._unknown_send is None
@@ -522,16 +524,48 @@ def test_restore_failure_does_not_skip_owned_process_and_job_cleanup(harness):
     assert "synthetic_secret" not in json.dumps(harness.events)
 
 
-def test_recovery_restores_visibility_then_refreshes_page_and_fences_old_generation(harness):
+def test_recovery_restarts_same_profile_and_reenables_captions_without_sending(harness):
     page = open_browser(harness)
+    old_process = harness.service.process
     generation = harness.service.generation
     harness.service._hide_requested = True
     harness.service._visibility = SimpleNamespace(close=lambda: harness.trace.append(("visibility.restore",)))
+    preferences = harness.profile / "Default" / "Preferences"
+    saved = json.loads(preferences.read_text(encoding="utf-8"))
+    saved["accessibility"]["captions"]["live_caption_enabled"] = False
+    saved["account_marker"] = "retained_local_fixture"
+    preferences.write_text(json.dumps(saved), encoding="utf-8")
     harness.service.recover_caption()
-    assert page.calls[-1] == ("Page.reload", {"ignoreCache": False}, 20)
-    assert harness.trace.index(("visibility.restore",)) < harness.trace.index(("page.call", "Page.reload"))
+    launches = [index for index, row in enumerate(harness.trace) if row[0] == "process.launch"]
+    assert len(harness.launched) == 2 and old_process.poll() is not None
+    assert harness.trace.index(("visibility.restore",)) < launches[-1]
+    assert harness.launched[-1][0][-1] == URL
+    assert harness.launched[0][0][1] == harness.launched[-1][0][1]
+    assert page.closed and harness.service._page is not page
+    saved = json.loads(preferences.read_text(encoding="utf-8"))
+    assert saved["accessibility"]["captions"]["live_caption_enabled"] is True
+    assert saved["account_marker"] == "retained_local_fixture"
     assert harness.service.generation > generation and not harness.service._hide_requested
     assert not any(row[0] == "Runtime.evaluate" for row in page.calls)
+
+
+def test_cancelling_hide_without_a_snapshot_does_not_claim_caption_visible(harness):
+    open_browser(harness)
+    harness.events.clear()
+    harness.service.set_caption_hidden(False)
+    assert [event["kind"] for event in harness.events] == ["caption_unhidden"]
+
+
+@pytest.mark.parametrize("restored_status,expected", [("restored", "caption_visible"),
+                                                    ("identity_changed", "caption_unhidden")])
+def test_restore_requires_a_live_restored_snapshot_before_claiming_visible(harness, restored_status, expected):
+    open_browser(harness)
+    controller = SimpleNamespace(hidden=True, last_status="hidden")
+    controller.close = lambda: setattr(controller, "last_status", restored_status)
+    harness.service._visibility = controller
+    harness.events.clear()
+    harness.service.set_caption_hidden(False)
+    assert [event["kind"] for event in harness.events] == [expected]
 
 
 def test_recovering_wrong_room_does_not_refresh_or_send(harness):

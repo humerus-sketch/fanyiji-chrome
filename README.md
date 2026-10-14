@@ -4,9 +4,11 @@
 
 ## 下载
 
-- [Windows x64 完整程序包](https://github.com/humerus-sketch/fanyiji-chrome/releases/download/v0.1.1/FanyiJiChrome-v0.1.1-windows-x64.zip)。无需安装 Python，完整解压后运行 `翻译姬·Chrome字幕版.exe`；不要只复制 EXE。
-- [独立源码 ZIP](https://github.com/humerus-sketch/fanyiji-chrome/releases/download/v0.1.1/FanyiJiChrome-v0.1.1-source.zip)。
-- [Release 与 SHA-256 校验文件](https://github.com/humerus-sketch/fanyiji-chrome/releases/tag/v0.1.1)。
+- [Windows x64 完整程序包 0.1.4](https://github.com/humerus-sketch/fanyiji-chrome/releases/download/v0.1.4/FanyiJiChrome-v0.1.4-windows-x64.zip)。无需安装 Python，完整解压后运行 `翻译姬·Chrome字幕版.exe`；不要只复制 EXE。
+- [独立源码 ZIP](https://github.com/humerus-sketch/fanyiji-chrome/releases/download/v0.1.4/FanyiJiChrome-v0.1.4-source.zip)。
+- [Release 与 SHA-256 校验文件](https://github.com/humerus-sketch/fanyiji-chrome/releases/tag/v0.1.4)。
+
+0.1.4 补全字幕读取需要的 CLR 依赖，修复恢复气泡与隐藏选项冲突、迁移后的语音组件读取权限，以及 Codex 桌面环境中模型路径过长导致字幕不可用的问题。构建会实际检查冻结程序的 UI Automation 依赖；错误提示不会作为字幕或弹幕正文。
 
 语音版是另一个项目：[翻译姬·语音版](https://github.com/humerus-sketch/fanyiji)。两版可以独立安装和运行。
 
@@ -17,7 +19,9 @@
 3. 在专用 Chrome 的“设置 → 无障碍功能”开启“实时字幕”，添加日语并等待 Chrome 下载语言资源；开启“实时翻译”，目标语言选择中文。
 4. 让直播页播放日语讲话，先确认 Chrome 原生中文字幕气泡有文字，再检查翻译姬的字幕显示。首次使用先保持原生气泡可见，读取正常后再尝试隐藏。
 
-关闭气泡后可点击程序的“恢复原生字幕”；该操作取消隐藏选项并恢复显示，必要时刷新专用直播页。
+专用 Chrome 当前页面必须与程序填写的房号一致；在浏览器中手动换房后，请回到“Chrome 直播间”更新房号并重新连接。当前版本不会自动接管另一个房间。
+
+关闭气泡后可点击程序的“恢复原生字幕”；该操作取消隐藏选项，先关闭旧的专用 Chrome，再使用同一资料目录重新打开当前直播间，保留登录状态。人声播放和气泡文字出现后才算恢复读取；重新打开浏览器不等于字幕已经生成。
 原生字幕识别在设备端进行，实时翻译会将字幕发送给 Google，翻译需要网络；语言配置和可用条件参见 [Google 官方说明](https://support.google.com/chrome/answer/10538231?hl=zh-Hans)。
 无法使用 Google 实时翻译时，可以使用另一个项目的语音版选择本地或其他翻译源。
 
@@ -60,6 +64,7 @@ python tools/build.py
 ```
 
 输出 `dist/翻译姬·Chrome字幕版/`，不带本地识别、CTranslate2、WebView2 或 llama.cpp CPU / NVIDIA GPU 运行库。
+字幕读取需要 `pythonnet/CLR` 组件，完整程序包必须保留这些依赖。构建会实际加载系统 CLR/WPF/UIA 类型进行自检；缺少组件时停止无效重试并提示更新完整程序包。
 
 ## 资料隔离
 

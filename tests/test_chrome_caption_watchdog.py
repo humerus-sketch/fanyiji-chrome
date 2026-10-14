@@ -125,6 +125,26 @@ def test_no_new_words_never_causes_helper_restart(harness):
     assert health["snapshot_age_seconds"] == 2.0 and health["caption_state"] == "unchanged"
 
 
+def test_missing_dependency_stops_automatic_restart_and_preserves_explicit_retry(harness):
+    service, clock, workers, events, calls = harness
+    generation = service.generation
+    workers[0].stdout = io.StringIO(json.dumps({"kind": "status", "code": "dependency_missing",
+        "generation": generation, "session": 7}) + "\n")
+    service._read(workers[0], generation)
+    assert service._worker is None and workers[0].dead
+    assert service.health_snapshot["reader_recovery_state"] == "stopped"
+    assert service.health_snapshot["caption_state"] == "disconnected"
+    assert service.health_snapshot["recovery_attempts"] == 0
+    for _ in range(5):
+        clock.advance(60)
+        service.watchdog_tick()
+    assert len(calls) == 1
+    assert [event["code"] for event in events if event["kind"] == "status"][-1] == "dependency_missing"
+    service.start("https://live.bilibili.com/1698225", session=8, owned_browser_pid=900)
+    assert len(calls) == 2
+    assert service._worker is workers[1] and not service._recovery_disabled
+
+
 def test_healthy_waiting_reader_is_not_restarted_without_a_caption(harness):
     service, clock, _workers, _events, calls = harness
     for _ in range(40):
